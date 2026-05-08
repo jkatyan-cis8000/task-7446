@@ -172,9 +172,14 @@ class HabitRepository:
         Returns:
             A Habit object
         """
+        created_date = row["created_date"]
+        # Convert string to date object if needed
+        if isinstance(created_date, str):
+            created_date = date.fromisoformat(created_date)
+
         return Habit(
             name=row["name"],
             description=row["description"],
             habit_id=row["id"],
-            created_date=row["created_date"],
+            created_date=created_date,
         )

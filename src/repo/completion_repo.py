@@ -112,7 +112,7 @@ class CompletionRepository:
             LIMIT 1
         """,
             (habit_id, completion_date),
-        )
+         )
 
         return cursor.fetchone() is not None
 
@@ -127,7 +127,12 @@ class CompletionRepository:
         Returns:
             A Completion object
         """
+        completion_date = row["completion_date"]
+        # Convert string to date object if needed
+        if isinstance(completion_date, str):
+            completion_date = date.fromisoformat(completion_date)
+
         return Completion(
             habit_id=row["habit_id"],
-            completion_date=row["completion_date"],
+            completion_date=completion_date,
         )
