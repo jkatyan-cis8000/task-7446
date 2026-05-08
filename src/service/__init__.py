@@ -1,1 +1,1 @@
-"""Service layer - business logic for the habit tracker."""
+"""Service layer - Business logic and application services."""

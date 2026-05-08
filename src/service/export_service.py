@@ -1,39 +1,36 @@
 """
-Business logic for CSV export functionality.
+Business logic for exporting habit data.
 
-This module provides the ExportService class which handles exporting habit data
-to CSV format with completion history and streak information.
+This service handles the export of habit data to CSV format, gathering
+completion history and streak information for specified habits.
 """
 
-from datetime import date
-from typing import Optional, List
+from typing import List, Optional
 
-from src.types.models import HabitExport
+from src.types.models import Habit, HabitExport
 from src.repo.habit_repo import HabitRepository
 from src.repo.completion_repo import CompletionRepository
 from src.providers.csv_writer import write_csv
-from src.providers.date_utils import format_date, today
+from src.providers.date_utils import format_date, get_week_start, get_week_end, today
 
 
 class ExportService:
     """
     Business logic service for exporting habit data.
 
-    Handles exporting habit completion data to CSV format with summary
-    information. Supports exporting all habits or a filtered subset.
+    Provides methods for preparing habit data for export and writing it to
+    CSV files in a user-friendly format.
     """
 
     def __init__(
-        self,
-        habit_repo: HabitRepository,
-        completion_repo: CompletionRepository,
+        self, habit_repo: HabitRepository, completion_repo: CompletionRepository
     ):
         """
         Initialize the ExportService with repositories.
 
         Args:
-            habit_repo: HabitRepository for accessing habits
-            completion_repo: CompletionRepository for accessing completions
+            habit_repo: HabitRepository for retrieving habits
+            completion_repo: CompletionRepository for completion data
         """
         self._habit_repo = habit_repo
         self._completion_repo = completion_repo
@@ -44,154 +41,95 @@ class ExportService:
         """
         Export habit data to a CSV file.
 
-        Exports habit names, completion dates, and current streak information.
-        If include_habits is None, exports all habits.
+        If include_habits is None, exports all habits. Otherwise exports only
+        the specified habit IDs.
+
+        The CSV includes a weekly summary with streak information for each habit.
 
         Args:
-            filepath: Path where the CSV file should be written
-            include_habits: List of habit IDs to export (None = all habits)
+            filepath: Path to write the CSV file to
+            include_habits: List of habit IDs to export, or None for all
 
         Raises:
-            ValueError: If filepath is invalid
+            ValueError: If any specified habit ID doesn't exist
             IOError: If the file cannot be written
         """
-        if not filepath or not isinstance(filepath, str):
-            raise ValueError("filepath must be a non-empty string")
-
         # Get habits to export
         all_habits = self._habit_repo.list_habits()
 
-        if include_habits is not None:
-            if not isinstance(include_habits, list):
-                raise ValueError("include_habits must be a list or None")
-            # Filter habits by ID
-            habit_map = {h.habit_id: h for h in all_habits}
-            habits_to_export = [
-                habit_map[hid] for hid in include_habits if hid in habit_map
-            ]
-        else:
+        if include_habits is None:
             habits_to_export = all_habits
+        else:
+            # Validate all specified habits exist
+            habits_dict = {h.habit_id: h for h in all_habits}
+            for habit_id in include_habits:
+                if habit_id not in habits_dict:
+                    raise ValueError(f"Habit with ID {habit_id} not found")
+            habits_to_export = [habits_dict[hid] for hid in include_habits]
 
-        # Prepare data for export
+        # Prepare CSV data
         headers = ["Habit", "Week Starting", "Days Completed", "Status"]
         rows = []
 
+        # Get current week info
+        current_date = today()
+        week_start = get_week_start(current_date)
+
         for habit in habits_to_export:
             export_data = self.prepare_export_data(habit.habit_id)
+            rows.append(
+                [
+                    export_data.habit_name,
+                    format_date(week_start),
+                    str(len(export_data.completed_dates)),
+                    "Active" if export_data.current_streak > 0 else "Inactive",
+                ]
+            )
 
-            # Create row for current week
-            row = [
-                export_data.habit_name,
-                self._get_current_week_start(),
-                str(len(export_data.completed_dates)),
-                self._get_status(export_data.current_streak),
-            ]
-            rows.append(row)
-
-        # Write CSV file
+        # Write to CSV
         write_csv(filepath, headers, rows)
 
     def prepare_export_data(self, habit_id: int) -> HabitExport:
         """
         Prepare habit data for export.
 
-        Gathers completion history and current streak information for a habit.
+        Gathers the habit name and all completion dates in the current week,
+        calculating the current streak.
 
         Args:
-            habit_id: The ID of the habit to export
+            habit_id: The ID of the habit to prepare
 
         Returns:
-            A HabitExport object with completion data
+            A HabitExport object with export-ready data
 
         Raises:
-            ValueError: If habit_id is invalid
-            LookupError: If habit not found
+            ValueError: If the habit doesn't exist
         """
-        if not isinstance(habit_id, int) or habit_id <= 0:
-            raise ValueError("Habit ID must be a positive integer")
-
-        # Get habit info
+        # Get habit
         habit = self._habit_repo.get_habit(habit_id)
         if habit is None:
-            raise LookupError(f"Habit with ID {habit_id} not found")
+            raise ValueError(f"Habit with ID {habit_id} not found")
 
-        # Get all completions (no date limit)
-        conn = self._completion_repo._db.get_connection()
-        cursor = conn.cursor()
+        # Get current week boundaries
+        current_date = today()
+        week_start = get_week_start(current_date)
+        week_end = get_week_end(current_date)
 
-        cursor.execute(
-            """
-            SELECT completion_date FROM completions
-            WHERE habit_id = ?
-            ORDER BY completion_date
-        """,
-            (habit_id,),
+        # Get completions for current week
+        completions = self._completion_repo.get_completions(
+            habit_id, week_start, week_end
         )
 
-        rows = cursor.fetchall()
-        completed_dates = [
-            format_date(
-                row["completion_date"]
-                if isinstance(row["completion_date"], date)
-                else date.fromisoformat(row["completion_date"])
-            )
-            for row in rows
-        ]
+        # Format completion dates as strings
+        completed_dates = sorted(
+            [format_date(c.completion_date) for c in completions]
+        )
 
-        # Get current streak (days in current week)
-        current_streak = self._get_current_week_completion_count(habit_id)
+        # Calculate streak (days completed in current week)
+        current_streak = len(set(c.completion_date for c in completions))
 
         return HabitExport(
             habit_name=habit.name,
             completed_dates=completed_dates,
             current_streak=current_streak,
         )
-
-    @staticmethod
-    def _get_current_week_start() -> str:
-        """
-        Get the current week start date as a formatted string.
-
-        Returns:
-            Current week start date in YYYY-MM-DD format
-        """
-        from src.providers.date_utils import get_week_start
-
-        return format_date(get_week_start(today()))
-
-    def _get_current_week_completion_count(self, habit_id: int) -> int:
-        """
-        Count completions for a habit in the current week.
-
-        Args:
-            habit_id: The ID of the habit
-
-        Returns:
-            Number of days completed this week
-        """
-        from src.providers.date_utils import get_week_start, get_week_end
-
-        week_start = get_week_start(today())
-        week_end = get_week_end(today())
-
-        completions = self._completion_repo.get_completions(
-            habit_id, week_start, week_end
-        )
-
-        return len(completions)
-
-    @staticmethod
-    def _get_status(current_streak: int) -> str:
-        """
-        Determine status based on current streak.
-
-        Args:
-            current_streak: Number of days completed this week
-
-        Returns:
-            Status string ("Active" or "Inactive")
-        """
-        if current_streak >= 1:
-            return "Active"
-        else:
-            return "Inactive"
