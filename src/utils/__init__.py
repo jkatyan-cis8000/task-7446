@@ -1,1 +1,1 @@
-"""Utils layer - Output formatting and helper utilities."""
+"""Utils layer - Pure helper functions with no domain logic."""
