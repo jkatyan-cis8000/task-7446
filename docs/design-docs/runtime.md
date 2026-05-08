@@ -2,96 +2,164 @@
 
 ## Overview
 
-The runtime layer manages application lifecycle and dependency injection. The `HabitTrackerApp` class serves as the single entry point for all application functionality, wiring all components together and providing accessors for use by the UI layer.
+The runtime layer manages application initialization and component lifecycle. It acts as the central wiring hub that brings together all layers (types, config, repo, services, providers) and provides a single entry point for the UI layer.
+
+The runtime layer is responsible for:
+- Database initialization
+- Creating all repositories and services
+- Dependency injection between components
+- Application lifecycle management (startup and shutdown)
 
 ## Module: app.py
 
 ### Purpose
-Provides the `HabitTrackerApp` class that orchestrates application initialization, component wiring, and cleanup.
+Provides the main application class that initializes and wires together all components.
 
-### Key Classes and Methods
+### HabitTrackerApp Class
 
-#### HabitTrackerApp class
-- `__init__()`: Initialize with uninitialized component references
-- `initialize() -> None`: Set up all components and wire dependencies
-- `get_habit_service() -> HabitService`: Get the habit service accessor
-- `get_logging_service() -> LoggingService`: Get the logging service accessor
-- `get_streak_service() -> StreakService`: Get the streak service accessor
-- `get_export_service() -> ExportService`: Get the export service accessor
-- `shutdown() -> None`: Clean up resources and reset component references
+**Responsibilities:**
+- Initialize all components in dependency order
+- Manage dependencies between layers
+- Provide getter methods for UI layer to access services
+- Clean shutdown of database connections
 
-### Design Decisions
+**Key Methods:**
+- `__init__()`: Create all component instances (but don't initialize yet)
+- `initialize() -> None`: Set up database schema and prepare for use
+- `get_habit_service() -> HabitService`: Get habit service
+- `get_logging_service() -> LoggingService`: Get logging service
+- `get_streak_service() -> StreakService`: Get streak service
+- `get_export_service() -> ExportService`: Get export service
+- `shutdown() -> None`: Clean up resources and close connections
 
-#### Lazy vs. Eager Initialization
-- Components are initialized eagerly in `initialize()` method
-- This ensures all dependencies are met before any service is used
-- Failing early (during initialize) is better than failing later
+### Dependency Injection Pattern
 
-#### Dependency Injection Pattern
-- Services receive their dependencies through constructor injection
-- Repositories receive the HabitDB instance
-- This makes dependencies explicit and testable
+The app wires dependencies in the following order:
 
-#### Service Accessors
-- Services are accessed through getter methods (get_*_service)
-- Getters validate that initialize() was called first
-- Raises RuntimeError if accessed before initialization
+```
+1. HabitDB (raw database)
+   ↓
+2. HabitRepository, CompletionRepository (depend on HabitDB)
+   ↓
+3. Services (depend on repositories):
+   - HabitService(HabitRepository)
+   - LoggingService(HabitRepository, CompletionRepository)
+   - StreakService(HabitRepository, CompletionRepository)
+   - ExportService(HabitRepository, CompletionRepository)
+```
 
-#### Component Lifecycle
-- Components are stored as optional instance variables (initialized to None)
-- `initialize()` creates and wires all components
-- `shutdown()` closes connections and resets all references
-- Allows multiple initialize/shutdown cycles
+This ensures:
+- No circular dependencies
+- Each component has exactly what it needs
+- Easy to test (can inject mock repositories)
+- Clean separation of concerns
 
-### Component Wiring Order
-1. Database directory creation
-2. HabitDB initialization with schema
-3. Repository instantiation (HabitRepository, CompletionRepository)
-4. Service instantiation with repository dependencies:
-   - HabitService(habit_repo)
-   - LoggingService(completion_repo)
-   - StreakService(completion_repo, habit_repo)
-   - ExportService(habit_repo, completion_repo)
+### Usage Pattern
 
-### Constraints
-- All services must be accessed via getter methods (not created directly)
-- Services cannot be used until `initialize()` has been called
-- Each getter raises RuntimeError if called before initialization
-- Shutdown is safe to call multiple times (idempotent)
+```python
+# Initialize
+app = HabitTrackerApp()
+app.initialize()  # Set up database
 
-## Integration Notes
+# Use services
+habit_service = app.get_habit_service()
+habit = habit_service.add_habit("Reading", "30 min daily")
 
-### With Configuration Layer
-- Uses `create_db_directory()` from config.settings
-- Ensures database directory exists before opening connection
+logging_service = app.get_logging_service()
+logging_service.log_today(habit.habit_id)
 
-### With Repository Layer
-- Creates HabitDB and passes it to repositories
-- Ensures all database operations use the same connection
-- Relies on repository interfaces for data access
+streak_service = app.get_streak_service()
+streak = streak_service.get_weekly_streak(habit.habit_id)
 
-### With Service Layer
-- Wires all four services with their repository dependencies
-- Services depend on repositories, not on each other
-- Services are used exclusively through HabitTrackerApp accessors
+export_service = app.get_export_service()
+export_service.export_to_csv("/tmp/habits.csv")
 
-### With UI Layer
-- CLI creates a HabitTrackerApp instance
-- CLI calls initialize() before processing commands
-- CLI calls get_*_service() to access business logic
-- CLI calls shutdown() during cleanup
+# Shutdown
+app.shutdown()  # Clean up database
+```
+
+## Import Structure
+
+The runtime layer may import from:
+- `types`: Type definitions
+- `config`: Configuration constants and functions
+- `repo`: Database and repository classes
+- `service`: Business logic services
+- `providers`: Utility functions
+
+The runtime layer must NOT import from:
+- UI layer
+- Any external packages
+
+This ensures runtime can be tested independently and maintains proper layer isolation.
+
+## Initialization Sequence
+
+### Construction Phase (`__init__`)
+1. Create HabitDB instance
+2. Create HabitRepository and CompletionRepository
+3. Create all service instances with their dependencies
+
+At this point, no database operations occur - this is just object creation.
+
+### Initialization Phase (`initialize`)
+1. Ensure database directory exists (via `create_db_directory()`)
+2. Initialize database schema (via `db.init_db()`)
+
+The split between `__init__` and `initialize` allows:
+- Lazy initialization (app can be created without immediately touching disk)
+- Testing (can skip `initialize` for in-memory tests)
+- Error handling (initialization errors can be caught separately)
+
+### Shutdown Phase (`shutdown`)
+1. Close database connection
+2. All other resources are automatically cleaned up
 
 ## Error Handling
 
-- `RuntimeError`: Raised if services are accessed before `initialize()` is called
-- Database errors are propagated from HabitDB
-- Repository and service errors are propagated to caller
+**During initialization:**
+- `IOError`: Database directory or file cannot be created
+- `sqlite3.Error`: Database schema initialization fails
+- Both should be propagated to the caller for handling
+
+**During operation:**
+- Services raise `ValueError` for business logic errors
+- Repository raises `sqlite3.IntegrityError` for constraint violations
+- UI layer catches and reports these to the user
 
 ## Testing Considerations
 
-When testing the runtime layer:
-- Create a test HabitTrackerApp instance
-- Call `initialize()` before running tests
-- Call `shutdown()` during cleanup
-- Mock repositories if testing runtime in isolation
-- Integration tests should use real repositories/database
+For unit testing services, create a mock app:
+
+```python
+class MockApp:
+    def __init__(self, in_memory=True):
+        self._db = HabitDB()
+        if in_memory:
+            self._db._db_path = ":memory:"
+        self._habit_repo = HabitRepository(self._db)
+        self._completion_repo = CompletionRepository(self._db)
+        self._db.init_db()  # Initialize in-memory schema
+        
+        self._habit_service = HabitService(self._habit_repo)
+        self._logging_service = LoggingService(self._habit_repo, self._completion_repo)
+        # ... other services
+```
+
+Then test services independently:
+
+```python
+app = MockApp()
+habit_service = app.get_habit_service()
+habit = habit_service.add_habit("Test", "Test habit")
+assert habit.name == "Test"
+app.shutdown()
+```
+
+## Dependencies
+
+- **types**: Habit, Completion, WeeklyStreak, HabitExport
+- **config**: create_db_directory, other configuration
+- **repo**: HabitDB, HabitRepository, CompletionRepository
+- **service**: HabitService, LoggingService, StreakService, ExportService
+- **providers**: date_utils, logger, csv_writer
