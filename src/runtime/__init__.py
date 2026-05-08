@@ -1,1 +1,1 @@
-"""Runtime layer - application initialization and lifecycle management."""
+"""Runtime layer - Application initialization and wiring."""

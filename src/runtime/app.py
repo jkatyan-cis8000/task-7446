@@ -1,9 +1,9 @@
 """
-Application initialization and dependency injection wiring.
+Application initialization and dependency wiring.
 
-This module provides the HabitTrackerApp class which orchestrates application
-lifecycle and wires all components together. It serves as the single entry point
-for the entire application.
+This module initializes the entire application stack, setting up the database,
+repositories, and services with proper dependency injection. It provides a
+single entry point for the UI layer to access all application functionality.
 """
 
 from src.config.settings import create_db_directory
@@ -20,131 +20,90 @@ class HabitTrackerApp:
     """
     Main application class for the habit tracker.
 
-    Manages application lifecycle including initialization, component wiring,
-    and cleanup. Uses dependency injection to wire repositories and services.
-    All components are initialized on demand and cached as instance variables.
+    Initializes and manages all components of the application, including
+    database connection, repositories, and services. Provides a clean interface
+    for the UI layer to access application functionality.
+
+    Uses dependency injection to pass repositories and services to each layer,
+    ensuring loose coupling and testability.
     """
 
     def __init__(self):
-        """Initialize the application with uninitialized component references."""
-        self._db: HabitDB | None = None
-        self._habit_repo: HabitRepository | None = None
-        self._completion_repo: CompletionRepository | None = None
-        self._habit_service: HabitService | None = None
-        self._logging_service: LoggingService | None = None
-        self._streak_service: StreakService | None = None
-        self._export_service: ExportService | None = None
+        """Initialize the application instance."""
+        # Core components (uninitialized)
+        self._db: HabitDB = HabitDB()
+        self._habit_repo: HabitRepository = HabitRepository(self._db)
+        self._completion_repo: CompletionRepository = CompletionRepository(self._db)
+
+        # Services (uninitialized)
+        self._habit_service: HabitService = HabitService(self._habit_repo)
+        self._logging_service: LoggingService = LoggingService(
+            self._habit_repo, self._completion_repo
+        )
+        self._streak_service: StreakService = StreakService(
+            self._habit_repo, self._completion_repo
+        )
+        self._export_service: ExportService = ExportService(
+            self._habit_repo, self._completion_repo
+        )
 
     def initialize(self) -> None:
         """
-        Initialize all application components.
+        Initialize the application.
 
-        Sets up the database, creates repositories, and initializes services
-        with proper dependency injection. This should be called before the
-        application begins processing requests.
+        Sets up the database schema and ensures all components are ready to use.
+        This must be called before any other operations.
 
-        Ensures:
-        - Database directory exists
-        - Database schema is initialized
-        - All repositories are created
-        - All services are wired with their dependencies
+        Raises:
+            IOError: If the database cannot be created or initialized
         """
         # Ensure database directory exists
         create_db_directory()
 
-        # Initialize database
-        self._db = HabitDB()
+        # Initialize the database schema
         self._db.init_db()
-
-        # Initialize repositories
-        self._habit_repo = HabitRepository(self._db)
-        self._completion_repo = CompletionRepository(self._db)
-
-        # Initialize services with dependency injection
-        self._habit_service = HabitService(self._habit_repo)
-        self._logging_service = LoggingService(self._completion_repo)
-        self._streak_service = StreakService(self._completion_repo, self._habit_repo)
-        self._export_service = ExportService(self._habit_repo, self._completion_repo)
 
     def get_habit_service(self) -> HabitService:
         """
-        Get the HabitService instance.
+        Get the habit service for habit management operations.
 
         Returns:
-            The initialized HabitService for managing habits
-
-        Raises:
-            RuntimeError: If application has not been initialized
+            The HabitService instance
         """
-        if self._habit_service is None:
-            raise RuntimeError(
-                "Application not initialized. Call initialize() first."
-            )
         return self._habit_service
 
     def get_logging_service(self) -> LoggingService:
         """
-        Get the LoggingService instance.
+        Get the logging service for completion logging operations.
 
         Returns:
-            The initialized LoggingService for logging completions
-
-        Raises:
-            RuntimeError: If application has not been initialized
+            The LoggingService instance
         """
-        if self._logging_service is None:
-            raise RuntimeError(
-                "Application not initialized. Call initialize() first."
-            )
         return self._logging_service
 
     def get_streak_service(self) -> StreakService:
         """
-        Get the StreakService instance.
+        Get the streak service for streak calculation operations.
 
         Returns:
-            The initialized StreakService for calculating streaks
-
-        Raises:
-            RuntimeError: If application has not been initialized
+            The StreakService instance
         """
-        if self._streak_service is None:
-            raise RuntimeError(
-                "Application not initialized. Call initialize() first."
-            )
         return self._streak_service
 
     def get_export_service(self) -> ExportService:
         """
-        Get the ExportService instance.
+        Get the export service for exporting habit data.
 
         Returns:
-            The initialized ExportService for exporting data
-
-        Raises:
-            RuntimeError: If application has not been initialized
+            The ExportService instance
         """
-        if self._export_service is None:
-            raise RuntimeError(
-                "Application not initialized. Call initialize() first."
-            )
         return self._export_service
 
     def shutdown(self) -> None:
         """
-        Clean up application resources.
+        Shut down the application cleanly.
 
-        Closes the database connection and resets all component references.
-        Safe to call even if application was not initialized.
+        Closes the database connection and cleans up resources.
+        Should be called before application exit.
         """
-        if self._db is not None:
-            self._db.close()
-
-        # Reset references
-        self._db = None
-        self._habit_repo = None
-        self._completion_repo = None
-        self._habit_service = None
-        self._logging_service = None
-        self._streak_service = None
-        self._export_service = None
+        self._db.close()
